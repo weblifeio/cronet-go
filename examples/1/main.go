@@ -65,6 +65,7 @@ func main() {
 	engineParams.SetProxyServer(proxyArg.String())
 
 	t := cronet.NewCronetTransport(engineParams, true)
+	defer t.Close()
 	ConfigureClientCertificate(&t.Engine, certPath, keyPath, []string{urlArg.Host, proxyArg.Host})
 
 	client := &http.Client{

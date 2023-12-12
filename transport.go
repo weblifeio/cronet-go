@@ -69,7 +69,6 @@ func (t *RoundTripper) Close() error {
 }
 
 func (t *RoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
-
 	requestParams := NewURLRequestParams()
 	if request.Method == "" {
 		requestParams.SetMethod("GET")
@@ -89,11 +88,7 @@ func (t *RoundTripper) RoundTrip(request *http.Request) (*http.Response, error) 
 
 		}
 	}
-	if request.Body != nil {
-		uploadProvider := NewUploadDataProvider(&bodyUploadProvider{request.Body, request.GetBody, request.ContentLength})
-		requestParams.SetUploadDataProvider(uploadProvider)
-		requestParams.SetUploadDataExecutor(t.Executor)
-	}
+
 	m := &sync.Mutex{}
 	responseHandler := urlResponse{
 		FollowRedirect: t.FollowRedirect,
@@ -109,6 +104,18 @@ func (t *RoundTripper) RoundTrip(request *http.Request) (*http.Response, error) 
 		cancel:   make(chan struct{}),
 		done:     make(chan struct{}),
 	}
+
+	if request.Body != nil {
+		responseHandler.canDestroyRequest.Add(1)
+		uploadProvider := NewUploadDataProvider(&bodyUploadProvider{
+			request.Body,
+			request.GetBody,
+			request.ContentLength,
+			&responseHandler.canDestroyRequest})
+		requestParams.SetUploadDataProvider(uploadProvider)
+		requestParams.SetUploadDataExecutor(t.Executor)
+	}
+
 	responseHandler.response.Body = &responseHandler
 	go responseHandler.monitorContext(request.Context())
 
@@ -126,10 +133,11 @@ func (t *RoundTripper) RoundTrip(request *http.Request) (*http.Response, error) 
 type urlResponse struct {
 	FollowRedirect bool
 
-	complete *sync.Cond
-	request  URLRequest
-	response http.Response
-	err      error
+	complete          *sync.Cond
+	canDestroyRequest sync.WaitGroup
+	request           URLRequest
+	response          http.Response
+	err               error
 
 	access     sync.Mutex
 	read       chan int
@@ -199,7 +207,6 @@ func (r *urlResponse) Close() error {
 
 // Cronet automatically decompresses body content if one of these encodings is used
 var cronetEncodings = []string{"br", "deflate", "gzip", "x-gzip", "zstd"}
-
 
 func (r *urlResponse) OnRedirectReceived(self URLRequestCallback, request URLRequest, info URLResponseInfo, newLocationUrl string) {
 	if r.FollowRedirect {
@@ -294,6 +301,7 @@ func (r *urlResponse) close(request URLRequest, err error) {
 
 	close(r.done)
 	r.complete.Signal()
+	r.canDestroyRequest.Wait()
 	request.Destroy()
 }
 
@@ -301,6 +309,7 @@ type bodyUploadProvider struct {
 	body          io.ReadCloser
 	getBody       func() (io.ReadCloser, error)
 	contentLength int64
+	closed        *sync.WaitGroup
 }
 
 func (p *bodyUploadProvider) Length(self UploadDataProvider) int64 {
@@ -343,4 +352,5 @@ func (p *bodyUploadProvider) Rewind(self UploadDataProvider, sink UploadDataSink
 func (p *bodyUploadProvider) Close(self UploadDataProvider) {
 	self.Destroy()
 	p.body.Close()
+	p.closed.Done()
 }
