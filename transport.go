@@ -220,7 +220,6 @@ func (r *urlResponse) OnRedirectReceived(self URLRequestCallback, request URLReq
 		r.response.Header.Set(header.Name(), header.Value())
 	}
 	r.response.Body = io.NopCloser(io.MultiReader())
-	r.uploadComplete.Wait()
 	request.Cancel()
 	r.readyToRead.Signal()
 }
