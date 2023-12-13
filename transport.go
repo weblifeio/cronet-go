@@ -85,7 +85,6 @@ func (t *RoundTripper) RoundTrip(request *http.Request) (*http.Response, error) 
 			header.SetValue(value)
 			requestParams.AddHeader(header)
 			header.Destroy()
-
 		}
 	}
 
@@ -99,19 +98,19 @@ func (t *RoundTripper) RoundTrip(request *http.Request) (*http.Response, error) 
 			ProtoMinor: request.ProtoMinor,
 			Header:     make(http.Header),
 		},
-		complete: sync.NewCond(m),
-		read:     make(chan int),
-		cancel:   make(chan struct{}),
-		done:     make(chan struct{}),
+		readyToRead: sync.NewCond(m),
+		read:        make(chan int),
+		cancel:      make(chan struct{}),
+		done:        make(chan struct{}),
 	}
 
 	if request.Body != nil {
-		responseHandler.canDestroyRequest.Add(1)
+		responseHandler.uploadComplete.Add(1)
 		uploadProvider := NewUploadDataProvider(&bodyUploadProvider{
 			request.Body,
 			request.GetBody,
 			request.ContentLength,
-			&responseHandler.canDestroyRequest})
+			&responseHandler.uploadComplete})
 		requestParams.SetUploadDataProvider(uploadProvider)
 		requestParams.SetUploadDataExecutor(t.Executor)
 	}
@@ -126,18 +125,18 @@ func (t *RoundTripper) RoundTrip(request *http.Request) (*http.Response, error) 
 	requestParams.Destroy()
 	urlRequest.Start()
 	m.Lock()
-	responseHandler.complete.Wait()
+	responseHandler.readyToRead.Wait()
 	return &responseHandler.response, responseHandler.err
 }
 
 type urlResponse struct {
 	FollowRedirect bool
 
-	complete          *sync.Cond
-	canDestroyRequest sync.WaitGroup
-	request           URLRequest
-	response          http.Response
-	err               error
+	readyToRead    *sync.Cond
+	uploadComplete sync.WaitGroup
+	request        URLRequest
+	response       http.Response
+	err            error
 
 	access     sync.Mutex
 	read       chan int
@@ -222,8 +221,9 @@ func (r *urlResponse) OnRedirectReceived(self URLRequestCallback, request URLReq
 		r.response.Header.Set(header.Name(), header.Value())
 	}
 	r.response.Body = io.NopCloser(io.MultiReader())
+	r.uploadComplete.Wait()
 	request.Cancel()
-	r.complete.Signal()
+	r.readyToRead.Signal()
 }
 
 func (r *urlResponse) OnResponseStarted(self URLRequestCallback, request URLRequest, info URLResponseInfo) {
@@ -252,7 +252,8 @@ func (r *urlResponse) OnResponseStarted(self URLRequestCallback, request URLRequ
 	}
 	r.response.TransferEncoding = r.response.Header.Values("Content-Transfer-Encoding")
 	r.response.Close = true
-	r.complete.Signal()
+	r.uploadComplete.Wait()
+	r.readyToRead.Signal()
 }
 
 func (r *urlResponse) OnReadCompleted(self URLRequestCallback, request URLRequest, info URLResponseInfo, buffer Buffer, bytesRead int64) {
@@ -260,7 +261,7 @@ func (r *urlResponse) OnReadCompleted(self URLRequestCallback, request URLReques
 	defer r.access.Unlock()
 
 	if bytesRead == 0 {
-		r.close(request, io.EOF)
+		r.OnSucceeded(self, request, info)
 		return
 	}
 
@@ -300,8 +301,7 @@ func (r *urlResponse) close(request URLRequest, err error) {
 	}
 
 	close(r.done)
-	r.complete.Signal()
-	r.canDestroyRequest.Wait()
+	r.readyToRead.Signal()
 	request.Destroy()
 }
 
@@ -309,7 +309,7 @@ type bodyUploadProvider struct {
 	body          io.ReadCloser
 	getBody       func() (io.ReadCloser, error)
 	contentLength int64
-	closed        *sync.WaitGroup
+	complete      *sync.WaitGroup
 }
 
 func (p *bodyUploadProvider) Length(self UploadDataProvider) int64 {
@@ -352,5 +352,5 @@ func (p *bodyUploadProvider) Rewind(self UploadDataProvider, sink UploadDataSink
 func (p *bodyUploadProvider) Close(self UploadDataProvider) {
 	self.Destroy()
 	p.body.Close()
-	p.closed.Done()
+	p.complete.Done()
 }
