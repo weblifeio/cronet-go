@@ -23,14 +23,14 @@ func IsValidHeaderName(value string) bool {
 	return isToken(value)
 }
 
-func IsValidHeaderValue(value string) bool {
+func IsValidHeaderValue(value string) (bool, string) {
 	if len(value) == 0 {
-		return false
+		return false, "header value is empty"
 	}
 	for _, c := range value {
 		if c == '\x00' || c == '\r' || c == '\n' {
-			return false
+			return false, "header value contains invalid character"
 		}
 	}
-	return true
+	return true, ""
 }

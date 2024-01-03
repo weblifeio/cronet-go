@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/textproto"
@@ -17,6 +18,8 @@ import (
 
 var asyncExecutor Executor
 var syncExecutor Executor
+var logger = log.New(os.Stderr, "", 0)
+
 
 func init() {
 	asyncExecutor = NewExecutor(func(executor Executor, command Runnable) {
@@ -82,7 +85,13 @@ func (t *RoundTripper) RoundTrip(request *http.Request) (*http.Response, error) 
 	}
 	for key, values := range request.Header {
 		for _, value := range values {
-			if len(value) == 0 {
+			if !IsValidHeaderName(key) {
+				logger.Println("cronet_error invalid header name : ", key)
+				continue
+			}
+			valid, message := IsValidHeaderValue(value)
+			if !valid {
+				logger.Println("cronet_error invalid header value, name: ", key, ", value: ", value, ". message: ", message)
 				continue
 			}
 			header := NewHTTPHeader()
