@@ -90,7 +90,7 @@ func (t *RoundTripper) RoundTrip(request *http.Request) (*http.Response, error) 
 
 		}
 	}
-	if request.Body != nil {
+	if request.Body != http.NoBody {
 		uploadProvider := NewUploadDataProvider(&bodyUploadProvider{request.Body, request.GetBody, request.ContentLength})
 		requestParams.SetUploadDataProvider(uploadProvider)
 		requestParams.SetUploadDataExecutor(syncExecutor)
